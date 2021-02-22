@@ -21,19 +21,19 @@
 - 处理延迟，传输延迟，排队延迟，传播延迟。
 - RTT 是 **往返时间** 指的是从一台主机传输到另一台主机的时间，加上响应数据包返回的时间。
 
-## 抖动。
+## 抖动
 
 - 因为 RTT 其实不是一个常数，RTT 与平均延迟（期望） 的偏差就叫做抖动。
-    - 处理延迟，网络延迟的最小部分，也是对抖动给你贡献最小。（一般发生在数据包路线发生调整时）
-    - 传输延迟和传播延迟（TD 和 PD）链路层协议决定了传输延迟，路由长度决定了传播延迟。
-    - 当包量比较多的时候也会有排队延迟的变化。
+  - 处理延迟，网络延迟的最小部分，也是对抖动给你贡献最小。（一般发生在数据包路线发生调整时）
+  - 传输延迟和传播延迟（TD 和 PD）链路层协议决定了传输延迟，路由长度决定了传播延迟。
+  - 当包量比较多的时候也会有排队延迟的变化。
 
 - 抖动会影响 RTT 抑制算法，也会导致数据包乱序到达。要解决包乱序，需要包重组或者用 TCP 那样的可靠传输机制。
 
 - 避免抖动的方法：
   - 发送尽量少的包来保持低流量，优化服务器集群的位置，合理将处理任务拆帧，避免帧率导致的抖动。
 
-## 数据包丢失：
+## 数据包丢失
 
 - 数据包丢失的三个主要成因：不可靠的物理介质， 不可靠的链路层（信道满，丢失正在发送的帧），不可靠的网络层，处理数据包的速度低与到达路由器的速度，导致数据包队列满了。
 
@@ -81,5 +81,35 @@ InFlightPacket* DeliveryNotificationManager::WriteSequenceNumber(OutputMemoryBit
 - `mInFlightPackets` 负责存储那些发出而尚未确认的包。
 - 标记之后应用程序写入数据包负载并发送给目的主机。
 
-### 接收数据包并发送确认。
+### 接收数据包并发送确认
 
+```C++
+/**
+*将问题可以分成三类
+*/
+bool DeliveryNotificationManager::ProcessSequenceNumber(InputMemoryBitStream& inPacket)
+{
+  PacketSequenceNumber sequenceNumber;
+
+  inPacket.Read(sequenceNumber);
+  if(sequenceNumber == mNextExpectedSequenceNumber)
+  {
+    //如果这是希望那个帧。
+    mNextExpectedSequenceNumber = sequenceNumber + 1;
+    //这里先把sequenceNumber 缓存到队列中
+    AddPendingAck(sequenceNumber);
+    return true;
+  }else if(sequenceNumber < mNextExpectedSequenceNumer)
+  {
+    //出现了过期帧，直接丢弃
+    return false;
+  }else if(sequenceNumber > mNextExpectedSequenceNumber)
+  {
+    //将当前帧往后移，这个时候会将所有跳过的帧
+    mNextExpectedSequenceNumber = sequenceNumer +1;
+    //如果发送端侦测到 ack 的中断，它可以重发丢失的包
+    AddPendingAck(sequenceNumber);
+    return true;
+  }
+}
+```
