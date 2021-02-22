@@ -39,7 +39,7 @@
 
 ![Frame_Format](Ethernet_FrameFormat.drawio.svg)
 
-- 帧长度 / 类型域 （Length / Type）表示帧的长度或者类型的共用的域。以太网标准规定帧内封装的保温数据最大长度为 (1500 bytes)，也叫做**最大传输单元 (maximum trasmission unit MTU)**。 以太网标准还定义了 以太网类型的最小值为 0x0600 1536 ，所以如果 Length/Type 取值小于等于 1500 则标识帧长度，否则则是协议类型。
+- 帧长度 / 类型域 （Length / Type）表示帧的长度或者类型的共用的域。以太网标准规定帧内封装的保温数据最大长度为 (1500 bytes)，也叫做**最大传输单元 (maximum trasmission unit MTU)**。 以太网标准还定义了 以太网类型的最小值为 0x0600 1536 ，所以如果 Length/Type 取值小于等于 1500 则标识帧长度，否则则是协议类型。也就是说 头一个字节的取值非常重要 0x02E-0x5FF 表示当前数据的帧长度。
 
 - FCS 帧检验序列是两个地址，帧长度/类型，数据和其他填充信息生成的循环冗余检验 CRC32 值。
 
@@ -60,6 +60,9 @@
 - **IP数据包的包总长（Total Length）**：长度为 16 bits 即 2 bytes, 最大标识 65535 bytes（包含头部和数据两个部分）， 由于 IP 数据包已经最少为 20 bytes 所以这个数据包中数据部分最大长度为 65515 bytes。
 - **片标识符（Fragment identification，16 bits），片标记（Fragment Flag ， 3 bits）和片偏移（Fragment Offset ， 13 bits）**：用于重组分片数据包，共计4 bytes。
   - 链路层 MTU 最大传输单位是 1500 byte 而一个 IP 数据包的大小最大可以是 65535 bytes， 这个时候就必须对 IP 数据包进行分割层最大传输单元的小片段。
+  - **片标识符(Fragment Identification, 2 bytes)**:这一组拆分的数据包被标记相同的值。
+  - **片偏移（Fragment offset,13 bits) 表示以 8 字节为单位**，该 IP 数据包从开始到属于这个分片数据包的位置。一个 65535 字节的数据最大能取的偏移就是 13 bits，基本单位是 8 bytes per bit。
+  - **片标记（fragment flag，3 bits） 也称为 More fragment flag**：并且都设置为 0x4 除了最后一个包不再使用该域来标识原始数据包中没有更多的分片数据包。附：如果该 Fragment flag 设置为 0x2 标识该 IP 数据包不能被拆分，如果链路层不支持对应大小会被直接丢弃。
 
 
 
