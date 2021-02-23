@@ -113,3 +113,44 @@ bool DeliveryNotificationManager::ProcessSequenceNumber(InputMemoryBitStream& in
   }
 }
 ```
+
+```C++
+void DeliveryNotificationManager::AddPendingAck(PacketSequenceNumber inSequenceNumber)
+{
+    if(mPendingAcks.size()==0
+    ||!mPendingAcks.back().ExtendIfBound(inSequenceNumber))
+    {
+        mPendingAcks.emplace_back(inSequenceNumber);
+    }
+}
+```
+
+- `ACKRange` 表示要确认的连续序列号的集合。 `mStart` 成员变量存储第一个要确认的序列号，`mCount`成员变量记录要确认的序列号的数量。
+
+```C++
+
+inline bool AckRange::ExtendIfBound(PacketSequenceNumber inSequenceNumber)
+{
+    if(inSequenceNumber == mStart + mCount)
+    {
+        ++mCount;
+        return true;
+    }else
+    {
+        return false;
+    }
+}
+
+void AckRange::Write(OutputMemoryBitStream& inPacket) const
+{
+}
+
+void AckRange::Read(InMemoryBitStream& inPacket)
+{
+    
+}
+
+```
+
+- `ExtendIfShould()` 方法检查序列号是否是连续的。如果是，增加计数，并告诉调用者范围扩大了。如果不是，返回错误，这样调用者便知道为不连续的序列号构建一个新的 `AckRange`.
+- `Write()` 和 `Read()` 方法的工作方式是先序列化开始序列号，再序列化个数。
