@@ -128,7 +128,7 @@ void DeliveryNotificationManager::AddPendingAck(PacketSequenceNumber inSequenceN
 - `ACKRange` 表示要确认的连续序列号的集合。 `mStart` 成员变量存储第一个要确认的序列号，`mCount`成员变量记录要确认的序列号的数量。
 
 ```C++
-
+//实现 AckRange
 inline bool AckRange::ExtendIfBound(PacketSequenceNumber inSequenceNumber)
 {
     if(inSequenceNumber == mStart + mCount)
@@ -143,14 +143,171 @@ inline bool AckRange::ExtendIfBound(PacketSequenceNumber inSequenceNumber)
 
 void AckRange::Write(OutputMemoryBitStream& inPacket) const
 {
+    inPacket.Write(mStart);
+    bool bHasCount = mCount > 1;
+    inPacket.Write(hasCount);
+    if(bHasCount)
+    {
+        uint32_t CountMinusOne = mCount - 1;
+        //Clamp 到 0-255 之间
+        uint8_t CountToAck = countMinusOne > 255 ? 255 :static_cast<uint8_t>(countMinusOne);
+        inPacket.Write(CountToAck);
+    }
 }
 
-void AckRange::Read(InMemoryBitStream& inPacket)
+void AckRange::Read(InputMemoryStream& inPacket)
 {
-    
+    inPacket.Read(mStart);
+    bool bHasCount;
+    inPacket.Read(hasCount);
+    if(hasCount)
+    {
+        uint8_t countMinusOne;
+        //读取包的数量.
+        inPacket.Read(countMinusOne);
+        mCount = countMinusOne + 1;
+    }else
+    {
+        //default:
+        mCount = 1;
+    }
 }
 
 ```
 
 - `ExtendIfShould()` 方法检查序列号是否是连续的。如果是，增加计数，并告诉调用者范围扩大了。如果不是，返回错误，这样调用者便知道为不连续的序列号构建一个新的 `AckRange`.
 - `Write()` 和 `Read()` 方法的工作方式是先序列化开始序列号，再序列化个数。
+
+```C++
+//写待确认
+void DeliveryNotificationManager::WritePendingAcks(OutputMemoryBitStream& inPacket)
+{
+    bool hasAcks = (mPendingAcks.size() > 0);
+    inPacket.Write(hasAcks);
+    if(hasAcks)
+    {
+        mPendingAcks.front().Write(inPacket);
+        mPendingAcks.pop_front();
+    }
+}
+```
+
+- 当接收端准备发送应答数据包时，在它向输出数据包中写完序列号之后，调用 WritePendingAcks() 来写所有累积的确认。
+  - 需要一个 Bit 确认是否有 Ack 数据包（AckRange），而且数据包丢失是例外，不是常规，所以通常只有一个待发送的 AckRange。
+
+### 接收确认并传递状态
+
+- 确认的丢失并不真正表示数据包的丢失。不同于 TCP 的重传， 对于可靠 Udp 丢失的数据包不一定重传，序列号便不会复用。也就是说客户端模块可能根据丢失的确认来重传但接收端可能已经有该数据了。
+
+```C++
+//处理确认
+void DeliveryNotificationManager::ProcessAcks(InputMemoryBitStream& inPacket)
+{
+    bool hasAcks;
+    inPacket.Read(hasAcks);
+
+    if(hasAcks)
+    {
+        AckRange ackRange;
+        ackRange.Read(inPacket);
+        //对于 InFlightPacket 而言如果 seq 小于 start 那么就需要去处理发送失败。
+        PacketSequenceNumber nextAckSequenceNumber = ackRange.GetStart();
+        uint32_t onePastAckdSequenceNumber = nextAckdSequenceNumber + ackRange.GetCount();
+        while(nextAckSequenceNumber <onePastAckdSquenceNumber && ! mInFlightPackets.empty())
+        {
+            const auto& nextInFlightPacket = mInFlightPackets.front();
+            //如果发送的包序小于下一个 AckSequenceNumber， 那么，我们就相当于没有获得对应包的 ack.
+            if(nextInFlightPacket < nextAckdSequenceNumber)
+            {
+                //当前发送的包发送失败，在处理失败之前将序号存储下来。
+                auto copyOfInFlightPacket = nextInFlightPacket;
+                mInFlightPackets.pop_front();
+                HandlePacketDeliveryFailure(copyOfInFlightPacket);
+            }else if(nextInFlightPacketSequenceNumber == nextAckdSequenceNumber)
+            {
+                //接收到对应的包
+                HandlePacketDeliverySuccess(nextInFlightPacket
+                mInFlightPackets.pop_front();
+                ++nextAckdSequenceNumber;
+            }else if(nextInFlightPacketSequenceNumber > nextAckdSequenceNumber)
+            {
+                //有可能上一个包由于超时已经被销毁
+                nextAckdSequenceNumber = nextInFlightPacketSequenceNumber;
+            }
+        }
+    }
+}
+```
+
+- 没有必要检查每一个单独的 InFlightPacket。因为新的 InFlightPacket 已经通过序号排列。所以只需要找到第一个AckdSequenceNumber的数据包，之前的全部丢弃判断失败，后面的全部成功。
+
+```C++
+//处理超时数据包
+void DeliveryNotificationManager::ProcessTimedOutPackets()
+{
+    uint64_t timeoutTime = Timing::sInstance.GetTimeMS() - kAckTimeOut;
+    while(!mInFlightPackets.empty())
+    {
+        //所有的数据包都是有序的所以所有超时的数据包应该在前面。
+        const auto& nextInFlightPacket = mInFlightPackets.front();
+        {
+            HandlePacketDeliveryFailure(nextInFlightPacket);
+            mInFlightPackets.pop_front();
+        }else
+        {
+            //no packets beyond could be timed out.
+            break;
+        }
+    }
+}
+```
+
+- 其中`GetTimeDispatched()` 方法实在创建时的时间戳（构造函数中。）
+
+```C++
+//跟踪状态。
+void DeliveryNotificationManager::HandlePacketDeliveryFailure(const InFlightPacket& inFlightPacket)
+{
+    ++mDroppedPacketCount;
+    inFlightPacket.HandleDeliveryFailure(this);
+}
+
+void DeliveryNofificationManager::HandlePacketDeliverySuccess(const InFlightPacket& inFlightPacket)
+{
+    ++mDeliveredPacketCount;
+    inFlightPacket.handleDeliverySuccess(this);
+}
+```
+
+```C++
+class InFlightPacket
+{
+public:
+
+    void SetTransmissionData(int32 inKey,TransmissionDataPtr inTransmissionData)
+    {
+        mTransmissionDataMap[inKey] = inTransmissionData;
+    }
+
+    const TransmissionDataPtr GetTransmissionData(int32 inKey) const
+    {
+        //最好使用数组。
+        auto it = mTransmissionDataMap.find(inKey);
+        return it != mTransmissiondataMap.end() ? it->second: nullptr;
+    }
+
+    void HandleDeliveryFailure(DeliveryNotificationManager* inDeliveryNotificationManager)
+    {
+
+    }
+
+    void HandleDeliveryFailure(DeliveryNotificationManager* inDeliveryNotificationManager)
+    {
+
+    }
+
+}
+```
+
+- 当模块向数据包的内存流中写可靠数据时，它创建自身的TrasmissionData,当模块向数据包的内存流中写可靠数据时，它创建自定义的 TransmissionData 子类的实例，并添加到InFlightPacket。
+
